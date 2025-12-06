@@ -1,0 +1,8 @@
+!pip install roboflow
+
+from roboflow import Roboflow
+rf = Roboflow(api_key="f280i1SZxSg9rYmL6vGh")
+project = rf.workspace("ruben-devendra-basketball-tracking").project("basketball-court-detection-cglsa")
+version = project.version(7)
+dataset = version.download("yolov8")
+                
