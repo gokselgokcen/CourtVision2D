@@ -1,74 +1,89 @@
 import cv2
-import numpy as np
-from ultralytics import YOLO
-
-# Foot point
-def get_foot_point(box):
-    """
-    Tespit kutusunun alt orta noktasını (ayak noktası) hesaplar.
-    box: (x1, y1, x2, y2) formatında sınırlayıcı kutu koordinatları.
-    """
-    x1, y1, x2, y2 = box
-    center_x = int((x1 + x2) / 2) #center
-    bottom_y = int(y2)           # bottom of box
-    return (center_x, bottom_y)  
-
+import config
+from src.court_manager import CourtManager
+from src.human_manager import HumanManager # Yeni eklenen modülümüz
 
 def main():
-    # YOLO modelini yükle
-    model = YOLO("yolov8m.pt")
-
-    video_path = 'basket2.mp4'
+    # 1. Video ve Kaynaklar
+    video_path = "assets/videos/basketLeft.mp4" 
     cap = cv2.VideoCapture(video_path)
-
-    # Video kontrolü
-    if not cap.isOpened():
-        print(f"HATA: '{video_path}' dosyası bulunamadı!")
-        print("Lütfen video isminin ve uzantısının (.mp4) doğru olduğundan emin ol.")
-        return
     
-    print("Video başladı! Çıkmak için klavyeden 'q' tuşuna bas.")
+    # Referans 2D Taktik Tahtası
+    tactical_board = cv2.imread(config.REF_IMAGE_PATH)
+    if tactical_board is None:
+        print(f"HATA: 2D Saha resmi bulunamadı! Path: {config.REF_IMAGE_PATH}")
+        return
 
-    # Pencere oluşturma ve boyutlandırma
-    cv2.namedWindow('Basketbol Takip', cv2.WINDOW_NORMAL)
-    cv2.resizeWindow('Basketbol Takip', 1280, 800)
+    # 2. Yöneticileri Başlat
+    print("Saha Modeli Yükleniyor...")
+    court_manager = CourtManager()
+    
+    print("İnsan Tespiti ve Renk Modülü Yükleniyor...")
+    human_manager = HumanManager()
 
-    # Ana video döngüsü
+    print("Sistem Hazır. Başlatılıyor...")
+
     while True:
-        succeess, frame = cap.read()
-        if not succeess:
-            print("Video bitti veya okunamadı.")
+        ret, frame = cap.read()
+        if not ret:
+            print("Video bitti.")
             break
 
-        #human detection
-        results = model(frame, stream=False, conf=0.25 ) 
+        # İşlem hızı ve ekran sığması için resize (Opsiyonel)
+        # Not: Koordinatlar resize'a göre değişeceği için modeller bunu handle eder
+        frame = cv2.resize(frame, (1280, 720))
 
-        for result in results:
-            boxes = result.boxes
-            for box in boxes:
-                # Sınıf ID'si 0 ise (YOLO için 'person' sınıfı)
-                if int(box.cls[0]) == 0:
-                    # Kutu koordinatlarını al (x1, y1, x2, y2)
-                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+        # --- AŞAMA 1: SAHA ZEMİNİ VE MATRİS (COURT) ---
+        # Önce sahayı bulup "Yerçekimini" ve "Koordinat Sistemini" kuruyoruz.
+        court_result = court_manager.predict(frame)
+        matrix_ready = court_manager.update_homography(court_result)
+        
+        # --- AŞAMA 2: OYUNCULAR VE TAKIMLAR (HUMANS) ---
+        # HumanManager'a frame'i ve court_manager'ı veriyoruz.
+        # O da bize işlenmiş görüntüyü ve oyuncu verilerini dönüyor.
+        annotated_frame, players_data = human_manager.detect_and_process(frame, court_manager)
 
-                    # Ayak noktasını hesapla
-                    foot_point = get_foot_point((x1, y1, x2, y2))
+        # --- AŞAMA 3: 2D BOARD GÖRSELLEŞTİRME ---
+        # Her karede temiz bir tahta kopya al
+        board_display = tactical_board.copy()
+        
+        # Eğer matris hazırsa ve oyuncu verisi varsa çizmeye başla
+        if matrix_ready and players_data:
+            for player in players_data:
+                # transform_point sonucu None değilse (yani saha içindeyse)
+                mapped_point = player['mapped_point']
+                team_id = player['team_id']
+                
+                if mapped_point is not None:
+                    # Rengi belirle (Takım 0: Mavi, Takım 1: Kırmızı, Bilinmeyen: Gri)
+                    if team_id == 0:
+                        color = (255, 0, 0)   # Mavi (OpenCV'de BGR -> Blue)
+                    elif team_id == 1:
+                        color = (0, 0, 255)   # Kırmızı (Red)
+                    elif team_id == 99:
+                        color = (50,50,50) # gri (Hakem)
+                    else:
+                        color = (128, 128, 128) # Gri (Öğrenme aşaması)
 
-                    # Kutu çizimi
-                    cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (255, 100, 0), 2)
-                    cv2.putText(frame, 'PLAYER', (int(x1), int(y1) - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 100, 0), 2)
+                    # 2D Tahtaya Nokta Çiz
+                    cv2.circle(board_display, mapped_point, 10, color, -1)
+                    # Etrafına siyah kontür atalım ki belli olsun
+                    cv2.circle(board_display, mapped_point, 10, (0,0,0), 2)
 
-                    # Ayak noktası çizimi
-                    cv2.circle(frame, foot_point, 5, (0, 0, 255), -1)
+        # --- EKRANA BASMA ---
+        # Saha çizgilerini görmek istiyorsan court_manager.draw_keypoints de kullanabilirsin
+        # Ama human_manager zaten frame üzerine kutu çiziyor.
+        
+        # Küçük bir bilgi ekranı ekle
+        cv2.putText(annotated_frame, f"Matrix Ready: {matrix_ready}", (50, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
+        
+        cv2.imshow("CourtVision AI - Main Camera", annotated_frame)
+        cv2.imshow("2D Tactical Board", board_display)
 
-        # Görüntüyü göster
-        cv2.imshow("Court", frame)
-
-        # 'q' tuşuna basılırsa döngüden çık
+        # 'q' ile çıkış
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
-            
-    # Kaynakları serbest bırak
+
     cap.release()
     cv2.destroyAllWindows()
 

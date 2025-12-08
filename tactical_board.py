@@ -17,7 +17,7 @@ ref_court_points = {
     10: [605, 24],   # Sağ Üst Köşe
     3:  [605, 333],  # Sağ Alt Köşe
     18: [489, 130],  # Sağ Serbest Atış (Üst)
-    21: [489, 228],  # Sağ Serbest Atış (Alt)
+    22: [489, 228],  # Sağ Serbest Atış (Alt)
     23: [452, 178],  # Sağ Serbest Atış (Tepe)
     12 : [605,129],
     17 : [605,229]
